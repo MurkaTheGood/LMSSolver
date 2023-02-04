@@ -2,15 +2,28 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import Select
-from typing import Tuple
+from typing import Tuple, List
 from datetime import datetime
 import random
 import time
 import os
+import enum
+import json
+
+class QuestionType(enum.Enum):
+	''' enum for question types.
+		More information in README.md
+	'''
+
+	unknown, multichoice, gapselect, shortanswer = \
+		range(4)
 
 CRED_PATH = 'credentials.txt'
 TEXT_ANSWERS_PATH = 'text_answers.txt'
 TEXT_ANSWERS = []
+
+CORRECT_ANSWERS = {}
+CORRECT_RATIO = None
 
 def get_auth_data() -> Tuple[str, str]:
 	''' returns the saved auth data for the LMS user.
@@ -28,9 +41,8 @@ def get_auth_data() -> Tuple[str, str]:
 
 		# save
 		with open(CRED_PATH, 'w') as f:
-			f.write(login)
-			f.write('\n')
-			f.write(password)
+			cred = '%s\n%s' % (login, password)
+			f.write(cred)
 
 		# return
 		return (login, password)
@@ -50,13 +62,71 @@ def init_text_answers():
 				# strip and add to text answers
 				TEXT_ANSWERS.append(t.strip())
 
-def answer_select(select_elem : WebElement) -> None:
-	''' answer the dropdown menu; will select the according
+	print('Loaded text answers: %s' % len(TEXT_ANSWERS))
+
+def init_correct_answers():
+	''' loads the correct answers from 'answers.json' '''
+	global CORRECT_ANSWERS, CORRECT_RATIO
+
+	try:
+		# try to load answers
+		with open('answers.json', 'r') as f:
+			CORRECT_ANSWERS = json.loads(f.read())
+
+		# ok, log
+		print('! Loaded correct answers!')
+
+		# ask for percent
+		while not CORRECT_RATIO:
+			try:
+				# read the percent
+				correct_percent = \
+					input('Desired correct answers ratio? Type percent, for example \'95\', \'67\', etc... ')
+				correct_percent = float(correct_percent)
+
+				# check range
+				if correct_percent < 0 or correct_percent > 100:
+					raise Exception('Out of range')
+
+				# calculate the ratio
+				CORRECT_RATIO = correct_percent / 100
+			except:
+				# fail
+				print('Must be a number in range [0..100] with \'%\' sign! Try again.')
+
+		# log
+		print('! Ok, %s%% will be correct' % int(CORRECT_RATIO * 100))
+	except:
+		print('! No answers supplied, answering randomly')
+		pass
+
+def remove_extra_whitespaces(original : str) -> str:
+	''' this function removes extra whitespaces inside string '''
+	# replace newlines with spaces
+	original = original.replace('\n', ' ')
+
+	# remove dublicated spaces
+	while original.find(' ' * 2) != -1:
+		original = original.replace(' ' * 2, ' ')
+
+	return original
+
+def get_question_type(question_elem : WebElement) -> QuestionType:
+	# getting the classes of question WebElement
+	classes = question_elem.get_attribute('class').split(' ')
+
+	if 'multichoice' in classes: return QuestionType.multichoice
+	if 'gapselect' in classes: return QuestionType.gapselect
+	if 'shortanswer' in classes: return QuestionType.shortanswer
+
+	# failed to determite the type of question
+	return QuestionType.unknown
+
+
+def answer_gapselect(select_elem : WebElement, s_text : str) -> None:
+	''' answers the dropdown menu; will select the according
 		answer if it is present in JSON.
 	'''
-
-	# TODO: get the caption of the <select>
-	select_caption = 'TODO'
 
 	# get all possible options as list of tuples (value, visual name)
 	options = \
@@ -76,16 +146,15 @@ def answer_select(select_elem : WebElement) -> None:
 	select.select_by_value(selected_option[0])
 
 	# log
-	print('Selected value \'%s\' for key \'%s\'' % \
-		(selected_option[1], select_caption))
+	print('gapselect \'%s\': \'%s\'' % \
+		(s_text, selected_option))
 
-def answer_text_input(input_elem : WebElement):
-	''' answer the text input; will select the according
+def answer_shortanswer(input_elem : WebElement, q_text : str) -> None:
+	''' answers the text input; will select the according
 		answer if it is present in JSON.
 	'''
 
-	# TODO: get the question text
-	question_text = 'TODO'
+	# TODO: check if can find the answer in JSON
 
 	# get the answer
 	answer = random.choice(TEXT_ANSWERS)
@@ -94,15 +163,77 @@ def answer_text_input(input_elem : WebElement):
 	input_elem.send_keys(answer)
 
 	# log
-	print('Typed \'%s\' into question \'%s\'' % \
-		(answer, question_text))
+	print('shortanswer \'%s\': \'%s\'' % \
+		(q_text, answer))
+
+def answer_multichoice(answer_boxes : List[WebElement], q_text : str) -> None:
+	''' answers multichoice; will select the according
+		answer if it is present in JSON.
+	'''
+
+	# TODO: check if can find the answer in JSON
+
+	# get options list of tuples
+	#	(input_WebElement : WebElement, answer_text : str)
+	options = []
+	for a_box in answer_boxes:
+		options.append(
+			(a_box.find_element(By.TAG_NAME, 'input'),
+			remove_extra_whitespaces(
+				a_box.find_element(By.CSS_SELECTOR, 'div.d-flex').text.strip()
+			))
+		)
+
+	# find the correct option
+	if 'multichoice' in CORRECT_ANSWERS:
+		# questions with the same text in json
+		questions_in_json = \
+			[x for x in CORRECT_ANSWERS['multichoice'] if x['title'] == q_text]
+
+		# not found
+		if not questions_in_json:
+			correct_options = [random.choice(options)]
+
+			# log
+			print('Not found correct answers, choosing randomly')
+		else:
+			# create the list of correct options
+			correct_options = []
+
+			# found, specify the correct options
+			# iterate through all questions in JSON
+			for q in questions_in_json:
+				for correct_answer in q['answers']:
+					try:
+						correct_options.append(
+							next(x for x in options if correct_answer in x[1]))
+					except:
+						# this question in JSON does not contain the corrent answer
+						pass
+
+			# log
+			print('Found correct answers')
+	# random options
+	else:
+		correct_options = [random.choice(options)]
+
+	# select
+	for correct_option in correct_options:
+		correct_option[0].click()
+
+	# log
+	print('multichoice \'%s\': \'%s\'' % \
+		(q_text, correct_option[1]))
+
 
 def main():
-	# init the answers
-	init_text_answers()
-
 	# getting the credentials
 	login, password = get_auth_data()
+
+	# init the answers
+	init_text_answers()
+	# correct answers load
+	init_correct_answers()
 
 	# log
 	print('Starting the driver...')
@@ -140,6 +271,13 @@ def main():
 	# clicking on the start button
 	start_button.click()
 
+	# check if not first question
+	if driver.find_element(By.CSS_SELECTOR, 'h3.no').text.strip().split(' ')[-1] != '1':
+		# go to the first question
+		driver.find_element(By.CSS_SELECTOR, '#quiznavbutton1').click()
+		# log
+		print('Going to the first question...')
+
 	# using infinite loop that will be broken when 
 	# there is button to finish the test on the page
 
@@ -172,36 +310,73 @@ def main():
 
 			break
 
-		# looking for questions
+		# looking for questions on this page
 		questions = driver.find_elements(By.CLASS_NAME, 'que')
 
-		for question in questions:
-			# check if there are moving parts (not combined with 
-			# the next one because the answering strategy may differ)
-			elements_list = question.find_elements(By.CSS_SELECTOR, 'td.control.hiddenifjs > select')
-			if elements_list:
-				input('Cannot answer the pages with moving parts. Please answer them (do not go to the next page!) and press Enter...')
+		for q_elem in questions:
+			# get the type of the question
+			q_type = get_question_type(q_elem)
 
-			# check if there are selects (not combined with 
-			# the previous one because the answering strategy may differ)
-			elements_list = question.find_elements(By.CSS_SELECTOR, 'span.control.group1 > select')
-			if elements_list:
-				# iterate through all the <select>'s
-				for select_elem in elements_list:
-					# answer
-					answer_select(select_elem)
-					# sleep a bit
-					time.sleep(1)
+			# shortanswer
+			if q_type == QuestionType.shortanswer:
+				# get the question title
+				q_text = q_elem. \
+					find_element(By.CLASS_NAME, 'qtext').text.strip()
 
-			# check if there are text inputs
-			elements_list = question.find_elements(By.CSS_SELECTOR, 'input.form-control.d-inline')
-			if elements_list:
-				# iterate through all the <input>'s
-				for input_elem in elements_list:
+				# remove whitespaces
+				q_text = remove_extra_whitespaces(q_text)
+
+				# get the text input
+				q_input = q_elem. \
+					find_element(By.CSS_SELECTOR, 'input.d-inline.form-control')
+
+				# answer
+				answer_shortanswer(q_input, q_text)
+			# gapselect
+			elif q_type == QuestionType.gapselect:
+				# iterate through <select> parent boxes
+				select_parent_boxes = \
+					q_elem.find_elements(By.CSS_SELECTOR, 'div.qtext > p')
+
+				# iterate through all boxes
+				for box in select_parent_boxes:
+					# check if box does not have select inside
+					if not box.find_elements(By.TAG_NAME, 'select'):
+						continue
+
+					# get the select text
+					s_text = box.text.strip()
+
+					# remove whitespaces
+					s_text = remove_extra_whitespaces(s_text)
+
+					# get the <select> tag
+					s_input = box.find_element(By.TAG_NAME, 'select')
+
 					# answer
-					answer_text_input(input_elem)
-					# sleep a bit
-					time.sleep(1)
+					answer_gapselect(s_input, s_text)
+			# multichoice
+			elif q_type == QuestionType.multichoice:
+				# get the question text
+				q_text = q_elem. \
+					find_element(By.CSS_SELECTOR, 'div.qtext'). \
+					text.strip()
+
+				# remove whitespaces
+				q_text = remove_extra_whitespaces(q_text)
+
+				# get answers list
+				q_answer_boxes = q_elem. \
+					find_elements(By.CSS_SELECTOR, 'div.answer > div')
+
+				# answer
+				answer_multichoice(q_answer_boxes, q_text)
+			# unknown
+			else:
+				print('Unknown question type with classes %s, skipped' % \
+					q_elem.get_attribute('class'))
+
+			time.sleep(1)
 
 
 		# finish the test or go to the next page
