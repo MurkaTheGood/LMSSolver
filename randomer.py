@@ -171,7 +171,8 @@ def answer_multichoice(answer_boxes : List[WebElement], q_text : str) -> None:
 		answer if it is present in JSON.
 	'''
 
-	# TODO: check if can find the answer in JSON
+	# log
+	print('multichoice \'%s\': ' % q_text, end='')
 
 	# get options list of tuples
 	#	(input_WebElement : WebElement, answer_text : str)
@@ -195,8 +196,11 @@ def answer_multichoice(answer_boxes : List[WebElement], q_text : str) -> None:
 			correct_options = [random.choice(options)]
 
 			# log
-			print('Not found correct answers, choosing randomly')
+			print('RANDOM ', end='')
 		else:
+			# must be correct?
+			to_be_correct = random.random() < CORRECT_RATIO
+
 			# create the list of correct options
 			correct_options = []
 
@@ -206,13 +210,16 @@ def answer_multichoice(answer_boxes : List[WebElement], q_text : str) -> None:
 				for correct_answer in q['answers']:
 					try:
 						correct_options.append(
-							next(x for x in options if correct_answer in x[1]))
+							next(x for x in options if \
+								((correct_answer in x[1]) if to_be_correct else \
+								(correct_answer not in x[1])) \
+							))
 					except:
 						# this question in JSON does not contain the corrent answer
 						pass
 
 			# log
-			print('Found correct answers')
+			print('CORRECT ' if to_be_correct else 'INCORRECT ', end='')
 	# random options
 	else:
 		correct_options = [random.choice(options)]
@@ -222,8 +229,7 @@ def answer_multichoice(answer_boxes : List[WebElement], q_text : str) -> None:
 		correct_option[0].click()
 
 	# log
-	print('multichoice \'%s\': \'%s\'' % \
-		(q_text, correct_option[1]))
+	print('\'%s\'' % correct_option[1])
 
 
 def main():
@@ -273,10 +279,10 @@ def main():
 
 	# check if not first question
 	if driver.find_element(By.CSS_SELECTOR, 'h3.no').text.strip().split(' ')[-1] != '1':
-		# go to the first question
-		driver.find_element(By.CSS_SELECTOR, '#quiznavbutton1').click()
 		# log
 		print('Going to the first question...')
+		# go to the first question
+		driver.find_element(By.CSS_SELECTOR, '#quiznavbutton1').click()
 
 	# using infinite loop that will be broken when 
 	# there is button to finish the test on the page
@@ -378,10 +384,7 @@ def main():
 
 			time.sleep(1)
 
-
-		# finish the test or go to the next page
-		print('Going to the next page...')
-
+		# next page
 		submit_button = driver.find_element(By.NAME, 'next')
 		submit_button.click()
 
